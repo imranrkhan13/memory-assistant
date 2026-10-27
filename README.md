@@ -17,9 +17,11 @@ It uses a simplified **Retrieval-Augmented Generation (RAG)** architecture. Pyth
 | Phase 4 | Memory updates and forgetting | Completed |
 | Phase 5 | Local browser application | Completed |
 | Phase 6 | Google Gemini integration | Completed |
-| Phase 7 | Traces and checkpoints | Planned |
+| Phase 7 | Durable extraction jobs, leases, retries and metadata traces | Implemented foundation |
+| Phase A | Correctness and normal durable save path | Offline tests passing |
+| Phases B–E | Measured semantic retrieval, service API, extended reliability, demonstration | Not started |
 
-**Current testing:** 48 automated tests passed during Phase 6 testing. Live Gemini extraction and source-linked question answering have also been verified.
+**Current testing (27 October 2026):** 100 automated tests passed using mock/stub providers and temporary databases. No live Gemini calls were made in Phase A; real-model extraction and answer quality remain unconfirmed. See [Phase A evidence](docs/phase-a.md).
 
 ## Requirements
 
@@ -71,7 +73,21 @@ Open:
 
 http://127.0.0.1:8765
 
-The application runs on localhost and is not intended for public deployment.
+The application binds to `127.0.0.1`; the `localhost` Host header is rejected. It is not intended for public deployment.
+
+Saving queues extraction by default in both the CLI and browser. `MEMORY_JOBS_ASYNC` is no longer required. Start the worker in a second terminal:
+
+```bash
+MEMORY_PROVIDER=mock python3 -m memory_assistant.job_daemon
+```
+
+For a single batch instead:
+
+```bash
+MEMORY_PROVIDER=mock python3 -m memory_assistant.job_cli run
+```
+
+The worker is deliberately a separate process. Without it, saves remain safely queued. It reads the same environment/`.env` configuration as the browser and CLI. Mock mode is offline; only use Gemini when you have confirmed free quota. No paid fallback is implemented.
 
 ### Browser Features
 
@@ -93,6 +109,8 @@ python3 -m memory_assistant init
 python3 -m memory_assistant add "I selected the 9 AM yoga batch"
 
 python3 -m memory_assistant notes
+
+python3 -m memory_assistant reprocess 1
 
 python3 -m memory_assistant facts
 
@@ -141,11 +159,11 @@ The user enters:
 
 > My fictional swimming class starts on October 28, 2026, at 7 AM.
 
-Python saves the original note in SQLite.
+Python saves the original note and a durable extraction job in one SQLite transaction. A successful save means extraction is pending, not completed.
 
 **2. Extract facts**
 
-Gemini analyzes the note and may extract:
+The worker uses the configured provider to analyze the note and may extract:
 
 - Swimming class date: October 28, 2026
 - Swimming class time: 7 AM
@@ -351,48 +369,43 @@ python3 -m unittest tests.test_ai -v
 
 Tests use isolated temporary SQLite databases.
 
-The most recently confirmed Phase 6 test run passed **48 tests**.
+The Phase A run passed **100 tests** (0 failures, 0 errors), including 12 new regressions. These are offline logic checks, not real-model quality measurements.
 
-### Live Testing Completed
+### Phase A behavior
 
-- Local browser application starts successfully.
-- Notes can be saved to SQLite.
-- Gemini API configuration works.
-- Gemini can extract structured facts from notes.
-- Extracted facts can be reviewed and approved.
-- Active facts can be retrieved.
-- Gemini can answer questions using saved source notes.
-- Source-linked answer validation works for tested cases.
+- Each note displays `pending`, `processing`, `done`, or `failed` in Notes and the CLI. Status comes from durable SQLite job records. Legacy notes without a processing checkpoint display pending and can be reprocessed.
+- `done` means extraction committed; proposed facts can still require approval.
+- Missing configuration, invalid schemas and empty extraction stop with a readable failure. Provider timeouts, HTTP 429 and HTTP 5xx retry automatically, at most three attempts per cycle (5 then 10 seconds before the remaining attempts; the backoff implementation caps at 300 seconds).
+- After fixing a failure, use **Reprocess note** or `python3 -m memory_assistant reprocess NOTE_ID`. This explicitly starts another bounded attempt cycle. Existing facts and decisions are retained; reprocessing does not reactivate rejected or superseded facts. Reprocessing does not revise already extracted facts when changing providers.
+- Conflicts show old and proposed statements. Human approval atomically supersedes current facts, after checking that those facts still match the proposal. A stale or legacy proposal must be reprocessed and reviewed again. Upload order never determines which decision wins.
+- Forget removes the source's jobs and processing traces in the same transaction as its facts and approvals, so a worker cannot restore the forgotten source.
+- Mock mode recognizes a few synthetic fixtures, not arbitrary language. Explicit yoga times support only unambiguous 7 AM/9 AM notes. Exact legacy fixture aliases (`yoga`, `yoga moved`, `library book`, `mixer warranty`) remain SAMPLE demonstrations; other unmatched notes create no facts and report empty extraction. No mock result establishes real-model quality.
+
+No live Gemini extraction or answering was verified in Phase A. Previous README live-provider claims have been removed because this run did not reproduce them.
 
 ## Current Limitations
 
 1. Retrieval uses keyword matching rather than semantic embeddings.
-2. Previously saved notes are not automatically reprocessed when switching AI providers.
+2. Reprocessing is explicit; changing providers does not replace already extracted facts.
 3. Relative dates such as "tomorrow" are not reliably normalized using the note creation date.
-4. The interface does not yet clearly display extraction failures for each note.
+4. There is no quality evaluation runner, versioned service API or second API client yet.
 5. Gemini API calls require an internet connection.
 6. The application is intended for local development, not production hosting.
 
 ## Future Roadmap
 
-### Phase 7 — Traces and Checkpoints
+### Next: Phase B — measured retrieval quality
 
-Planned improvements:
+Keep keyword retrieval as the baseline, choose a free local semantic approach only after checking hardware and licence constraints, and compare both on a frozen synthetic evaluation set. Phase B requires the owner's go-ahead after Phase A review.
 
-- Trace the complete note-processing workflow.
-- Record extraction and retrieval stages.
-- Track provider errors and processing results.
-- Add checkpoints for troubleshooting.
-- Improve visibility into failed operations.
+Later phases cover a versioned API, a second client, richer answer traces and a reproducible demonstration. Current traces contain extraction metadata only.
 
 ### Future Enhancements
 
 - SQLite FTS5 full-text search
 - Embedding-based semantic search
 - Hybrid keyword and semantic retrieval
-- Reprocess existing notes
 - Better relative-date handling
-- Extraction status indicators
 - Reduced Gemini API usage through direct-answer retrieval
 - Stronger authentication and encryption before handling sensitive data
 
