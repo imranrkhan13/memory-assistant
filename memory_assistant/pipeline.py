@@ -38,7 +38,13 @@ def prepare_schema():
             )
 
 
-def extract_note(note_id, provider=None, user_id=DEFAULT_USER_ID):
+def extract_note(
+    note_id,
+    provider=None,
+    user_id=DEFAULT_USER_ID,
+    job_id=None,
+    lease_token=None,
+):
     provider = provider or MockProvider()
 
     with get_connection() as conn:
@@ -57,6 +63,40 @@ def extract_note(note_id, provider=None, user_id=DEFAULT_USER_ID):
     results = []
 
     with get_connection() as conn:
+        # Acquire SQLite's write lock before validating the lease.
+        # The lock remains held until all facts are committed or
+        # the transaction is rolled back.
+        if job_id is not None:
+            if not lease_token:
+                raise ValueError("Missing worker lease token")
+
+            conn.execute("BEGIN IMMEDIATE")
+
+            valid_lease = conn.execute(
+                """
+                SELECT 1
+                FROM processing_jobs
+                WHERE id = ?
+                  AND user_id = ?
+                  AND note_id = ?
+                  AND status = 'running'
+                  AND lease_token = ?
+                  AND lease_until > ?
+                """,
+                (
+                    job_id,
+                    user_id,
+                    note_id,
+                    lease_token,
+                    utc_now(),
+                ),
+            ).fetchone()
+
+            if valid_lease is None:
+                raise RuntimeError(
+                    "Worker lease expired or ownership lost"
+                )
+
         for fact in candidates:
             subject = fact["subject"]
             value = fact["value"]
@@ -140,6 +180,39 @@ def extract_note(note_id, provider=None, user_id=DEFAULT_USER_ID):
             )
 
             results.append((status, fact_id))
+
+        if job_id is not None:
+            cursor = conn.execute(
+                """
+                UPDATE processing_jobs
+                SET status = 'succeeded',
+                    checkpoint = 'processing_completed',
+                    completed_at = ?,
+                    lease_token = NULL,
+                    lease_until = NULL,
+                    last_error_code = NULL,
+                    last_error_message = NULL
+                WHERE id = ?
+                  AND user_id = ?
+                  AND note_id = ?
+                  AND status = 'running'
+                  AND lease_token = ?
+                  AND lease_until > ?
+                """,
+                (
+                    utc_now(),
+                    job_id,
+                    user_id,
+                    note_id,
+                    lease_token,
+                    utc_now(),
+                ),
+            )
+
+            if cursor.rowcount != 1:
+                raise RuntimeError(
+                    "Job lease lost before atomic completion"
+                )
 
     return results
 

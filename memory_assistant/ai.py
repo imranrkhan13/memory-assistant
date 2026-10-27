@@ -34,6 +34,8 @@ def process_note(
     note_id,
     provider=None,
     user_id=DEFAULT_USER_ID,
+    job_id=None,
+    lease_token=None,
 ):
     """Extract candidate facts from a saved note."""
 
@@ -75,12 +77,16 @@ def process_note(
             note_id,
             provider=ReviewProvider(),
             user_id=user_id,
+            job_id=job_id,
+            lease_token=lease_token,
         )
 
     return extract_note(
         note_id,
         provider=provider,
         user_id=user_id,
+        job_id=job_id,
+        lease_token=lease_token,
     )
 
 

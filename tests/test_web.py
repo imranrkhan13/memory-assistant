@@ -24,6 +24,11 @@ class WebTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        cls.provider_patch = patch.dict(
+            "os.environ",
+            {"MEMORY_PROVIDER": "mock"},
+        )
+        cls.provider_patch.start()       
         cls.temp = tempfile.TemporaryDirectory()
         cls.db_path = Path(cls.temp.name) / "test.db"
 
@@ -51,6 +56,7 @@ class WebTests(unittest.TestCase):
         cls.thread.join(timeout=5)
         cls.db_patch.stop()
         cls.temp.cleanup()
+        cls.provider_patch.stop()
 
     def setUp(self):
         self.cookies = http.cookiejar.CookieJar()

@@ -17,6 +17,10 @@ from .ai import (
     answer_question,
 )
 from .gemini import GeminiError
+from .jobs import list_jobs, retry_job, init_jobs
+from .jobs import create_job, init_jobs
+from .queued_notes import add_queued_note
+
 from .storage import (
     add_note,
     init_db,
@@ -137,6 +141,7 @@ def esc(value):
 
 def initialize():
     init_db()
+    init_jobs()
     prepare_schema()
     prepare_forget_schema()
 
@@ -166,6 +171,7 @@ def layout(title, body):
         '<nav>'
         '<a href="/">Dashboard</a>'
         '<a href="/notes">Notes</a>'
+        '<a href="/jobs">Jobs</a>'
         '<a href="/facts">Facts</a>'
         '<a href="/approvals">Approvals</a>'
         '<a href="/ask">Ask Memory</a>'
@@ -447,6 +453,87 @@ def render_audit():
     return result + '</section>'
 
 
+
+def render_jobs():
+    """Show recent jobs and permitted manual retry actions."""
+    jobs = list_jobs(limit=100)
+
+    counts = {
+        "queued": 0,
+        "running": 0,
+        "succeeded": 0,
+        "failed": 0,
+        "cancelled": 0,
+    }
+
+    for job in jobs:
+        status = job["status"]
+        if status in counts:
+            counts[status] += 1
+
+    result = (
+        '<section><h2>Processing Jobs</h2>'
+        '<p class="muted">Showing the 100 most recent jobs. '
+        'Refresh to see updates. Retries are processed by '
+        'the background worker.</p>'
+        '<p>'
+        + " · ".join(
+            esc(label.title()) + ": <strong>"
+            + str(counts[label]) + "</strong>"
+            for label in counts
+        )
+        + '</p></section>'
+        '<section><h2>Recent jobs</h2>'
+    )
+
+    if not jobs:
+        result += '<p>No processing jobs yet.</p>'
+
+    for job in jobs:
+        status = str(job["status"])
+        attempts = int(job["attempts"])
+        max_attempts = int(job["max_attempts"])
+
+        result += (
+            '<div class="item">'
+            '<h3>Note #' + esc(job["note_id"]) + '</h3>'
+            '<p>Status: <strong>' + esc(status.upper())
+            + '</strong></p>'
+            '<p>Attempts: ' + str(attempts)
+            + ' / ' + str(max_attempts) + '</p>'
+            '<p>Checkpoint: '
+            + esc(job["checkpoint"] or "-") + '</p>'
+            '<p>Created: '
+            + esc(job["created_at"] or "-") + '</p>'
+            '<p>Available at: '
+            + esc(job["available_at"] or "-") + '</p>'
+            '<p>Completed: '
+            + esc(job["completed_at"] or "-") + '</p>'
+            '<p>Error code: '
+            + esc(job["last_error_code"] or "-") + '</p>'
+            '<small>Job ID: ' + esc(job["id"]) + '</small>'
+        )
+
+        # Do not display raw exception messages. They could
+        # contain sensitive provider or application details.
+        if status == "failed" and attempts < max_attempts:
+            result += form(
+                "/jobs/retry",
+                '<input type="hidden" name="job_id" value="'
+                + esc(job["id"]) + '">',
+                "Retry job",
+            )
+        elif status == "failed":
+            result += (
+                '<p class="muted">Retry limit reached. '
+                'No further attempts are available.</p>'
+            )
+
+        result += '</div>'
+
+    return result + '</section>'
+
+
 class MemoryHandler(BaseHTTPRequestHandler):
     """Minimal localhost HTTP handler."""
 
@@ -516,6 +603,8 @@ class MemoryHandler(BaseHTTPRequestHandler):
             title, body = "Dashboard", render_dashboard()
         elif path == "/notes":
             title, body = "Notes", render_notes()
+        elif path == "/jobs":
+            title, body = "Processing Jobs", render_jobs()
         elif path == "/facts":
             title, body = "Facts", render_facts()
         elif path == "/approvals":
@@ -583,7 +672,7 @@ class MemoryHandler(BaseHTTPRequestHandler):
             return
         path = urlsplit(self.path).path
         if path not in {
-            "/add", "/approve", "/reject", "/edit", "/forget"
+            "/add", "/approve", "/reject", "/edit", "/forget", "/jobs/retry"
         }:
             self._error(404, "Unknown action.")
             return
@@ -594,7 +683,21 @@ class MemoryHandler(BaseHTTPRequestHandler):
                 self._error(403, "Invalid CSRF token.")
                 return
 
-            if path == "/add":
+            if path == "/jobs/retry":
+                job_id = fields.get("job_id", [""])[0]
+
+                if not job_id or len(job_id) > 100:
+                    raise ValueError("Invalid job ID.")
+
+                if not retry_job(job_id):
+                    raise ValueError(
+                        "Job cannot be retried. It may be "
+                        "completed, running, or out of attempts."
+                    )
+
+                destination = "/jobs"
+
+            elif path == "/add":
                 value = fields.get("text", [""])[0].strip()
 
                 if not value or len(value) > 10000:
@@ -605,17 +708,31 @@ class MemoryHandler(BaseHTTPRequestHandler):
                         "This exact note was previously forgotten."
                     )
 
-                note_id = add_note(value)
+                # Phase 7 queue mode is opt-in while the existing
+                # synchronous browser tests remain supported.
+                queue_enabled = (
+                    os.environ.get("MEMORY_JOBS_ASYNC", "0") == "1"
+                )
 
-                try:
-                    process_note(note_id)
-                except (GeminiError, ValueError) as error:
-                    # Note remains saved for a later retry.
-                    # No facts are activated when extraction fails.
+                if queue_enabled:
+                    note_id, job_id = add_queued_note(value)
+                else:
+                    note_id = add_note(value)
+
+                if queue_enabled:
                     print(
-                        f"Extraction for note #{note_id} failed: {error}",
+                        f"Note #{note_id} queued as job {job_id}",
                         flush=True,
                     )
+                else:
+                    try:
+                        process_note(note_id)
+                    except (GeminiError, ValueError) as error:
+                        print(
+                            f"Extraction for note #{note_id} failed: "
+                            f"{type(error).__name__}",
+                            flush=True,
+                        )
 
                 destination = "/notes"
 
