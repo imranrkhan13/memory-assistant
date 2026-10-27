@@ -20,6 +20,7 @@ from .gemini import GeminiError
 from .jobs import list_jobs, retry_job, init_jobs
 from .jobs import create_job, init_jobs
 from .queued_notes import add_queued_note
+from .note_processing import processing_status, reprocess_note
 
 from .storage import (
     add_note,
@@ -247,10 +248,14 @@ def render_notes():
         result += '<p>No notes available.</p>'
 
     for note in notes:
+        status = processing_status(note["id"])
         result += (
             '<div class="item"><strong>Note #'
             + str(note["id"]) + '</strong>'
             + '<p>' + esc(note["raw_text"]) + '</p>'
+            + '<p>Extraction: <strong>' + esc(status["state"]) + '</strong></p>'
+            + '<p>' + esc(status.get("last_error_message") or "") + '</p>'
+            + (form("/notes/reprocess", '<input type="hidden" name="note_id" value="' + str(note["id"]) + '">', "Reprocess note") if status["state"] in ("done", "failed", "pending") and status.get("status") not in ("queued", "running") else "")
             + '<small>' + esc(note["created_at"]) + '</small>'
             + '</div>'
         )
@@ -316,7 +321,8 @@ def render_approvals():
         result += (
             '<div class="item"><strong>Approval #'
             + str(approval_id) + '</strong>'
-            + '<p>' + esc(approval["statement"]) + '</p>'
+            + '<p>Old: ' + esc('; '.join(approval['old_statements']) or 'No active fact') + '</p>'
+            + '<p>Proposed: ' + esc(approval["statement"]) + '</p>'
             + '<small>Reason: '
             + esc(approval["reason"]) + '</small>'
         )
@@ -672,7 +678,7 @@ class MemoryHandler(BaseHTTPRequestHandler):
             return
         path = urlsplit(self.path).path
         if path not in {
-            "/add", "/approve", "/reject", "/edit", "/forget", "/jobs/retry"
+            "/add", "/approve", "/reject", "/edit", "/forget", "/jobs/retry", "/notes/reprocess"
         }:
             self._error(404, "Unknown action.")
             return
@@ -683,7 +689,11 @@ class MemoryHandler(BaseHTTPRequestHandler):
                 self._error(403, "Invalid CSRF token.")
                 return
 
-            if path == "/jobs/retry":
+            if path == "/notes/reprocess":
+                reprocess_note(int(fields.get("note_id", ["0"])[0]))
+                destination = "/notes"
+
+            elif path == "/jobs/retry":
                 job_id = fields.get("job_id", [""])[0]
 
                 if not job_id or len(job_id) > 100:
@@ -708,31 +718,12 @@ class MemoryHandler(BaseHTTPRequestHandler):
                         "This exact note was previously forgotten."
                     )
 
-                # Phase 7 queue mode is opt-in while the existing
-                # synchronous browser tests remain supported.
-                queue_enabled = (
-                    os.environ.get("MEMORY_JOBS_ASYNC", "0") == "1"
+                note_id, job_id = add_queued_note(value)
+
+                print(
+                    f"Note #{note_id} queued as job {job_id}",
+                    flush=True,
                 )
-
-                if queue_enabled:
-                    note_id, job_id = add_queued_note(value)
-                else:
-                    note_id = add_note(value)
-
-                if queue_enabled:
-                    print(
-                        f"Note #{note_id} queued as job {job_id}",
-                        flush=True,
-                    )
-                else:
-                    try:
-                        process_note(note_id)
-                    except (GeminiError, ValueError) as error:
-                        print(
-                            f"Extraction for note #{note_id} failed: "
-                            f"{type(error).__name__}",
-                            flush=True,
-                        )
 
                 destination = "/notes"
 

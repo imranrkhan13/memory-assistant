@@ -39,6 +39,10 @@ def add_queued_note(text, user_id=DEFAULT_USER_ID):
     # Schema setup happens before the atomic transaction.
     init_db()
     init_jobs()
+    from .pipeline import prepare_schema
+    from .forget import prepare_forget_schema
+    prepare_schema()
+    prepare_forget_schema()
 
     job_id = str(uuid.uuid4())
     timestamp = utc_now()
@@ -47,6 +51,10 @@ def add_queued_note(text, user_id=DEFAULT_USER_ID):
 
     try:
         conn.execute("BEGIN IMMEDIATE")
+
+        from .forget import fingerprint
+        if conn.execute("SELECT 1 FROM forgotten_fingerprints WHERE user_id=? AND fingerprint=?", (user_id, fingerprint(text))).fetchone():
+            raise ValueError("This exact note was previously forgotten.")
 
         user = conn.execute(
             "SELECT id FROM users WHERE id = ?",

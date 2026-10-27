@@ -56,6 +56,7 @@ def forget_fact(fact_id, user_id=DEFAULT_USER_ID):
     WAL files, backups or operating-system snapshots.
     """
     with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         target = conn.execute(
             """
             SELECT f.id, f.note_id, f.statement, n.raw_text
@@ -154,6 +155,11 @@ def forget_fact(fact_id, user_id=DEFAULT_USER_ID):
             """,
             (user_id, note_id),
         )
+
+        # Deleting jobs also removes metadata traces. A paused worker loses
+        # its lease and cannot commit facts after this transaction.
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE name='processing_jobs'").fetchone():
+            conn.execute("DELETE FROM processing_jobs WHERE note_id=? AND user_id=?", (note_id, user_id))
 
         conn.execute(
             """

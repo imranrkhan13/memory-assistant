@@ -2,6 +2,7 @@
 """SAMPLE fact extraction and approval workflow."""
 
 import sqlite3
+import json
 
 from .providers import MockProvider
 from .storage import (
@@ -21,6 +22,10 @@ def prepare_schema():
             row["name"]
             for row in conn.execute("PRAGMA table_info(facts)")
         }
+
+        approval_columns = {row["name"] for row in conn.execute("PRAGMA table_info(approvals)")}
+        if "expected_active_ids" not in approval_columns:
+            conn.execute("ALTER TABLE approvals ADD COLUMN expected_active_ids TEXT")
 
         if "subject" not in columns:
             conn.execute(
@@ -60,17 +65,21 @@ def extract_note(
         raise ValueError("Secret-like content blocked.")
 
     candidates = provider.extract(note["raw_text"])
+    if job_id is not None and candidates == []:
+        from .processing_errors import ProcessingError
+        raise ProcessingError("EMPTY_EXTRACTION", "No facts extracted; review the note or provider.", False)
+    if not isinstance(candidates, list):
+        raise ValueError("Invalid extraction schema")
     results = []
 
     with get_connection() as conn:
         # Acquire SQLite's write lock before validating the lease.
         # The lock remains held until all facts are committed or
         # the transaction is rolled back.
+        conn.execute("BEGIN IMMEDIATE")
         if job_id is not None:
             if not lease_token:
                 raise ValueError("Missing worker lease token")
-
-            conn.execute("BEGIN IMMEDIATE")
 
             valid_lease = conn.execute(
                 """
@@ -149,19 +158,19 @@ def extract_note(
             fact_id = cursor.lastrowid
 
             if pending:
-                reason = (
-                    "conflict"
-                    if conflict
-                    else "low_confidence"
-                )
+                expected = [row["id"] for row in conn.execute(
+                    "SELECT id FROM facts WHERE user_id=? AND subject=? AND status='active' ORDER BY id",
+                    (user_id, subject),
+                )]
+                reason = "conflict" if conflict is not None else "low_confidence"
                 conn.execute(
                     """
                     INSERT INTO approvals (
-                        user_id, fact_id, status, reason, created_at
+                        user_id, fact_id, status, reason, created_at, expected_active_ids
                     )
-                    VALUES (?, ?, 'pending', ?, ?)
+                    VALUES (?, ?, 'pending', ?, ?, ?)
                     """,
-                    (user_id, fact_id, reason, utc_now()),
+                    (user_id, fact_id, reason, utc_now(), json.dumps(expected)),
                 )
 
             conn.execute(
@@ -222,7 +231,7 @@ def pending_facts(user_id=DEFAULT_USER_ID):
         rows = conn.execute(
             """
             SELECT a.id AS approval_id, f.id AS fact_id,
-                   f.statement, a.reason
+                   f.statement, a.reason, a.expected_active_ids
             FROM approvals a
             JOIN facts f ON f.id=a.fact_id
                          AND f.user_id=a.user_id
@@ -231,7 +240,14 @@ def pending_facts(user_id=DEFAULT_USER_ID):
             """,
             (user_id,),
         ).fetchall()
-        return [dict(row) for row in rows]
+        proposals = []
+        for row in rows:
+            proposal = dict(row)
+            expected = json.loads(proposal["expected_active_ids"] or "[]")
+            proposal["old_statements"] = [item["statement"] for fact_id in expected for item in conn.execute(
+                "SELECT statement FROM facts WHERE id=? AND user_id=?", (fact_id, user_id))]
+            proposals.append(proposal)
+        return proposals
 
 
 def resolve_fact(approval_id, decision, edited_statement=None,
@@ -244,6 +260,7 @@ def resolve_fact(approval_id, decision, edited_statement=None,
             raise ValueError("Invalid or secret-like edit.")
 
     with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         approval = conn.execute(
             """
             SELECT a.fact_id, f.subject, f.value

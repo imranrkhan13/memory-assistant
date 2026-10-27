@@ -98,18 +98,23 @@ def process_next_job(user_id=DEFAULT_USER_ID, provider=None):
     except Exception as error:
         # Avoid recording raw provider error messages because
         # they may contain sensitive request information.
-        error_code = type(error).__name__
+        from .processing_errors import classify_error
+        error_code, message, transient = classify_error(error)
 
         fail_job(
             job_id,
             token,
             error_code=error_code,
-            error_message="Note processing failed",
+            error_message=message,
+            transient=transient,
         )
 
         duration_ms = int(
             (time.monotonic() - started) * 1000
         )
+
+        if get_job(job_id, user_id=user_id) is None:
+            return None
 
         add_trace(
             job_id=job_id,

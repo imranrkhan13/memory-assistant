@@ -1,6 +1,6 @@
 
 """Provider interface and deterministic SAMPLE MockProvider."""
-
+import re
 import json
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -31,6 +31,24 @@ class MockProvider(Provider):
             self.cases = json.load(file)["cases"]
 
     def extract(self, text):
+        yoga = re.search(
+            r"\b(?:7|9)\s*(?:AM|a\.m\.)\b",
+            text,
+            re.IGNORECASE,
+        )
+
+        if re.search(r"\byoga\b", text, re.I) and yoga and len(re.findall(r"\b\d+\s*(?:am|pm)\b", text, re.I)) == 1:
+            hour = yoga.group(0)
+            hour = "7 AM" if hour.startswith("7") else "9 AM"
+
+            return [{
+                "statement": text.strip(),
+                "subject": "yoga_batch",
+                "value": hour,
+                "confidence": 0.99,
+            }]
+        if re.search(r"\byoga\b", text, re.I) and re.search(r"\d", text):
+            return []
         cases = sorted(
             self.cases,
             key=lambda case: len(case["contains"]),
@@ -38,12 +56,20 @@ class MockProvider(Provider):
         )
 
         for case in cases:
-            if case["contains"].lower() in text.lower():
+            # Exact fixture aliases remain available for offline demonstrations.
+            # Longer notes must contain the fixture value explicitly.
+            if (text.strip().lower() == case["contains"].lower() or
+                (case["contains"].lower() in text.lower() and
+                 all(fact["value"].lower() in text.lower()
+                     for fact in case["facts"]))):
                 return [
-                    dict(fact)
+                    {**fact, "statement": text.strip()}
                     for fact in case["facts"]
                 ]
 
+        if "mixer warranty" in text.lower():
+            return [{"statement": text.strip(), "subject": "mixer_receipt",
+                     "value": text.strip(), "confidence": 0.65}]
         return []
 
     def answer(self, question, context):
