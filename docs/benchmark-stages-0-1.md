@@ -29,3 +29,37 @@ The ingestion interface accepts only a `History` projection: namespace ID, raw s
 Stage 0 adds twelve synthetic unittest cases covering these boundaries, corrupt/truncated inputs, hash verification, atomic reingestion, duplicate occurrences and split stability. Tests require neither the download nor network access.
 
 Sources: [official release and format](https://github.com/xiaowu0162/LongMemEval/tree/9e0b455f4ef0e2ab8f2e582289761153549043fc), [cleaned dataset and MIT licence](https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/tree/98d7416c24c778c2fee6e6f3006e7a073259d48f), [official metric functions](https://github.com/xiaowu0162/LongMemEval/blob/9e0b455f4ef0e2ab8f2e582289761153549043fc/src/retrieval/eval_utils.py), [official reporting exclusions](https://github.com/xiaowu0162/LongMemEval/blob/9e0b455f4ef0e2ab8f2e582289761153549043fc/src/evaluation/print_retrieval_metrics.py).
+
+Stage 0 completion: `python3 -m unittest discover -s tests` passed **112 tests in 2.407 seconds**, 0 failures/errors/skips. Commit `b9870b7` froze the adapter and split before any retrieval scores were computed.
+
+## Stage 1: reproducible keyword baseline
+
+Run from the repository root:
+
+```sh
+python3 -m memory_assistant.benchmark download
+python3 -m memory_assistant.benchmark run --method keyword --subset dev
+```
+
+The first command downloads only the pinned public cleaned S release and verifies its exact bytes. If it already exists, it is verified without a download. The run command performs no network or model calls, loads no `.env`, and uses no product notes/database. It rechecks the dataset hash before ingestion. Raw downloads and the rebuildable benchmark SQLite index stay under the git-ignored `benchmarks/longmemeval/local/` directory. Removing that dedicated benchmark index and rerunning rebuilds it from the dataset.
+
+Each raw turn is one chunk, including user and assistant turns. Raw timestamps are retained but never scored. Tokenization and exact overlap count are shared with the product retriever; ties follow ascending insertion/chunk ID. There is no BM25, stemming, query expansion, recency boost, semantic model or zero-score padding. Sessions are ranked by the first occurrence of their ID in the ranked turns; repeated session IDs collapse to one session result. Search stops at ten distinct positive-score sessions.
+
+The metric port uses the pinned official `evaluate_retrieval`/`ndcg` session formulas over this unique-session ranking and the full unique-session corpus. It does not implement the upstream `evaluate_retrieval_turn2session` path, which can retain repeated session labels while extending its effective cutoff. Therefore these are official session metric formulas on our explicitly documented turn-to-session adapter, not a reproduction of every upstream retrieval protocol or a score comparable to vendor headlines.
+
+Official DCG discounts ranks as `1, 1/log2(2), 1/log2(3), ...`; the first two ranks consequently have equal discount. Using a common rank-plus-one nDCG library would change the result. Abstention questions are indexed but never searched/scored. Questions without full evidence in the top ten are listed with their missing IDs. Runtime/schema failures are listed separately and remain in the eligible denominator with zero credit; the output always reports selected, eligible, scored, failed and skipped counts. Latency reports cover retrieval only, with indexing and total time recorded separately.
+
+JSON results include per-question rankings, source/session IDs, scores, evidence misses, metric values and timings. They include no raw turns, reference answers or generated answers. Provenance records the code commit/dirty state, source digests, dataset revision/hash, manifest and split hashes, method/configuration, metric version, runtime and UTC date. A completed output file is published atomically and cannot be overwritten. Heldout execution is disabled in this stage; enabling it later requires an intentional code change after methods are frozen.
+
+Verification commands:
+
+```sh
+python3 -m unittest discover -s tests -p test_benchmark_runner.py
+python3 scripts/verify_longmemeval_metrics.py
+python3 -m unittest discover -s tests
+git diff --check
+```
+
+The runner's twelve synthetic tests passed in 0.114 seconds. The full suite passed **124 tests in 2.470 seconds**, 0 failures/errors/skips. Tests run offline without needing the large dataset or NumPy. The optional one-time metric audit used the already installed NumPy 2.1.2 to execute the unmodified pinned official source: **2,000 comparisons, 0 failures, maximum absolute nDCG difference `1.11e-16`**. For that audit only, the removed NumPy 1.x `asfarray` API was restored with its equivalent float-array conversion. No dependency was installed or added to the application.
+
+No dev score is claimed in this implementation commit. The measured run and its limits will be recorded separately against this frozen code.

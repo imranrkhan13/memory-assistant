@@ -5,7 +5,7 @@ import sqlite3
 import time
 
 from .dataset import History
-from ..retrieval import tokens
+from ..retrieval import keyword_score, tokens
 
 INDEX_VERSION = 'raw-turn-keyword-v1'
 
@@ -83,7 +83,7 @@ class BenchmarkIndex:
             FROM benchmark_chunks WHERE question_id=? ORDER BY chunk_id
         ''', (question_id,))
         for row in rows:
-            score = len(query_words.intersection(json.loads(row['tokens_json'])))
+            score = keyword_score(query_words, set(json.loads(row['tokens_json'])))
             if score:
                 ranked.append({'chunk_id': row['chunk_id'], 'session_id': row['session_id'],
                                'turn_ordinal': row['turn_ordinal'], 'score': score})
