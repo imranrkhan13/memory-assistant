@@ -1,0 +1,20 @@
+
+# Local database and SQLite auxiliary files
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Local environment variables
+.env
+.env.*
+
+# macOS
+.DS_Store

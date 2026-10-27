@@ -1,0 +1,48 @@
+{
+    "cases": [
+        {
+            "contains": "yoga",
+            "facts": [
+                {
+                    "statement": "I selected the 9 AM yoga batch because evening traffic is bad.",
+                    "subject": "yoga_batch",
+                    "value": "9 AM",
+                    "confidence": 0.98
+                }
+            ]
+        },
+        {
+            "contains": "library book",
+            "facts": [
+                {
+                    "statement": "My sample library book is due on November 3.",
+                    "subject": "library_due_date",
+                    "value": "November 3",
+                    "confidence": 0.95
+                }
+            ]
+        },
+        {
+            "contains": "mixer warranty",
+            "facts": [
+                {
+                    "statement": "My fictional mixer warranty receipt is in the August 12 email.",
+                    "subject": "mixer_receipt",
+                    "value": "August 12 email",
+                    "confidence": 0.65
+                }
+            ]
+        },
+        {
+            "contains": "yoga moved",
+            "facts": [
+                {
+                    "statement": "My yoga batch moved to 7 AM.",
+                    "subject": "yoga_batch",
+                    "value": "7 AM",
+                    "confidence": 0.99
+                }
+            ]
+        }
+    ]
+}
