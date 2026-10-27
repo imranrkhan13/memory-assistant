@@ -63,3 +63,60 @@ git diff --check
 The runner's twelve synthetic tests passed in 0.114 seconds. The full suite passed **124 tests in 2.470 seconds**, 0 failures/errors/skips. Tests run offline without needing the large dataset or NumPy. The optional one-time metric audit used the already installed NumPy 2.1.2 to execute the unmodified pinned official source: **2,000 comparisons, 0 failures, maximum absolute nDCG difference `1.11e-16`**. For that audit only, the removed NumPy 1.x `asfarray` API was restored with its equivalent float-array conversion. No dependency was installed or added to the application.
 
 No dev score is claimed in this implementation commit. The measured run and its limits will be recorded separately against this frozen code.
+
+## First measured run: keyword dev v1
+
+Code was frozen at `3bfda872211549520b6bf2c98a0a4b2140ce8897`; the runner recorded a **clean working tree**. No retrieval changes were made after seeing the scores.
+
+Exact command:
+
+```sh
+python3 -m memory_assistant.benchmark run --method keyword --subset dev --output benchmarks/longmemeval/results/keyword-dev-v1.json
+```
+
+Actual output:
+
+```text
+Provider: none (retrieval only); model calls: 0
+Selected: 40; eligible: 38; scored: 38; failed: 0; skipped abstentions: 2
+recall_all@10: 0.789474
+ndcg_any@10: 0.761281
+Retrieval latency (ms): {'samples': 38, 'p50': 3.978125052526593, 'p95': 4.863040987402201}
+Questions with missed evidence:
+  3fdac837: answer_419d21d5_1
+  57f827a0: answer_1bde8d3b
+  830ce83f: answer_0b1a0942_2
+  92a0aa75: answer_6cb8f792_1
+  eeda8a6d: answer_3e5fea0e_2
+  gpt4_731e37d7: answer_826d51da_2
+  gpt4_f2262a51: answer_55a6940c_1, answer_55a6940c_2, answer_55a6940c_3
+  gpt4_fa19884d: answer_ff201787_1
+Results: benchmarks/longmemeval/results/keyword-dev-v1.json
+```
+
+| Method | Eligible | All evidence in top 10 | recall_all@10 | Mean ndcg_any@10 | Failed | Excluded abstentions |
+|---|---:|---:|---:|---:|---:|---:|
+| Keyword, raw turns → unique sessions | 38 | 30 | 0.789474 | 0.761281 | 0 | 2 |
+
+The dedicated local index contains 19,748 turns across 1,906 session occurrences for these forty dev questions. Indexing the two abstention histories does not give them a retrieval score. Session IDs and timestamps are metadata only; neither is tokenized or used to boost rankings. The recorded processing time was 2,184 ms, including streaming, indexing and retrieval, but excluding initial hash verification and report writing. Retrieval-only p50/p95 used 38 samples. These timings are one local run, not a throughput or scale claim.
+
+| Type | Eligible | All evidence in top 10 | Mean ndcg_any@10 |
+|---|---:|---:|---:|
+| knowledge-update | 6 | 5 | 0.827556 |
+| multi-session | 10 | 5 | 0.547107 |
+| single-session-assistant | 5 | 5 | 1.000000 |
+| single-session-preference | 2 | 1 | 0.193426 |
+| single-session-user | 5 | 5 | 1.000000 |
+| temporal-reasoning | 10 | 9 | 0.810542 |
+
+These type groups are small and do not establish general quality differences. In particular, 5/5 on a subgroup is not proof of perfect retrieval. [Machine-readable run with provenance and per-question results](../benchmarks/longmemeval/results/keyword-dev-v1.json).
+
+## Proven, partial, missing
+
+- **Proven:** pinned bytes, frozen/disjoint stratified splits, isolation and leakage-boundary regressions, 124 passing offline tests, official-source metric conformance, and this single dev run with its full denominators and miss list. Model calls: **0**; no service charges. Stage 0 and Stage 1 are complete for the documented adapter.
+- **Partial:** this reuses the product's keyword scoring over raw benchmark turns, bypassing extraction and approval. It does not measure whether the product extracts useful facts. Session ranking is our documented adapter, not a reproduction of all upstream configurations. Latency excludes indexing unless explicitly marked as total processing time. Public benchmark text remains only in the local download/index; committed results contain IDs and metrics, not raw conversations.
+- **Missing:** semantic/hybrid comparison, answer generation and correctness labels, claim-support assessment, answer traces and failure diagnoses, heldout evaluation, versioned API and second client. No real-model quality, vendor score equivalence, production scale or hiring outcome is claimed. Product approval/Forget/crash-recovery tests remain separate from benchmark scores.
+
+The sixty heldout questions have not been retrieved/scored. Stop after Stage 1 for owner review before Stage 2. Nothing is pushed by this benchmark task.
+
+Final diff audit: `git diff --check origin/main..HEAD` reports two EOF blank-line warnings, both in the unmodified pinned official metric reference files. They are retained to preserve their recorded SHA-256 digests. The authored changes pass the working-tree diff check; the warnings do not indicate a test or benchmark failure.

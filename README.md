@@ -406,6 +406,8 @@ python3 -m memory_assistant.benchmark run --method keyword --subset dev
 
 The 277 MB download is pinned by revision and SHA-256 and stays outside Git. The split is frozen at 40 dev and 60 reserved heldout questions. Runs write versioned JSON results with `recall_all@10`, `ndcg_any@10`, misses, failures, denominator and latency. The benchmark never calls a model or reads your notes or `.env`. [Methodology, commands and evidence](docs/benchmark-stages-0-1.md).
 
+The first keyword dev run found **all required evidence in the top 10 for 30/38 scored questions** (`recall_all@10=0.789474`, mean `ndcg_any@10=0.761281`). There were 0 failed questions and 2 abstentions excluded from retrieval scoring. Retrieval-only latency across 38 questions was p50 3.98 ms / p95 4.86 ms in one local run. This is a retrieval subset result, not answer accuracy or a vendor-comparable full-benchmark result. No model calls were made; the 60 heldout questions remain unevaluated. [Versioned results and misses](benchmarks/longmemeval/results/keyword-dev-v1.json).
+
 Next, compare free local semantic and hybrid retrieval on the same dev questions, after checking hardware and licence constraints. Heldout execution stays disabled until methods are frozen. Retrieval scores and answer accuracy are separate measurements.
 
 Later phases cover a versioned API, a second client, richer answer traces and a reproducible demonstration. Current traces contain extraction metadata only.
