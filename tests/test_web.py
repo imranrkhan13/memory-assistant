@@ -1,8 +1,10 @@
 
-"""Phase 5: local browser HTTP integration tests."""
+"""Phase 5: local browser HTTP integration tests.
+
+Tests browser functionality with the Phase 7 queued note-processing flow.
+"""
 
 import http.cookiejar
-import re
 import tempfile
 import threading
 import unittest
@@ -18,6 +20,7 @@ from urllib.request import (
 
 from memory_assistant import storage
 from memory_assistant.web import create_server
+from memory_assistant.worker import process_pending_jobs
 
 
 class WebTests(unittest.TestCase):
@@ -28,7 +31,8 @@ class WebTests(unittest.TestCase):
             "os.environ",
             {"MEMORY_PROVIDER": "mock"},
         )
-        cls.provider_patch.start()       
+        cls.provider_patch.start()
+
         cls.temp = tempfile.TemporaryDirectory()
         cls.db_path = Path(cls.temp.name) / "test.db"
 
@@ -54,6 +58,7 @@ class WebTests(unittest.TestCase):
         cls.server.shutdown()
         cls.server.server_close()
         cls.thread.join(timeout=5)
+
         cls.db_patch.stop()
         cls.temp.cleanup()
         cls.provider_patch.stop()
@@ -64,8 +69,12 @@ class WebTests(unittest.TestCase):
             HTTPCookieProcessor(self.cookies)
         )
 
+        # This is an isolated temporary test database.
+        # Delete dependent records before deleting notes.
         with storage.get_connection() as conn:
             conn.execute("DELETE FROM approvals")
+            conn.execute("DELETE FROM processing_traces")
+            conn.execute("DELETE FROM processing_jobs")
             conn.execute("DELETE FROM facts")
             conn.execute("DELETE FROM notes")
             conn.execute("DELETE FROM audit_log")
@@ -112,6 +121,10 @@ class WebTests(unittest.TestCase):
                 response.geturl(),
             )
 
+    def run_queued_jobs(self):
+        """Process queued notes before checking extracted facts."""
+        process_pending_jobs()
+
     def test_dashboard_loads(self):
         status, body = self.get("/")
 
@@ -122,6 +135,7 @@ class WebTests(unittest.TestCase):
     def test_navigation_pages_load(self):
         for path in (
             "/notes",
+            "/jobs",
             "/facts",
             "/approvals",
             "/ask",
@@ -146,16 +160,55 @@ class WebTests(unittest.TestCase):
         self.assertTrue(url.endswith("/notes"))
         self.assertIn("9 AM yoga batch", body)
 
+        # Browser saving is asynchronous.
+        # A fact should not exist until the worker runs.
+        self.assertEqual(len(storage.list_facts()), 0)
+
+        with storage.get_connection() as conn:
+            jobs = conn.execute(
+                """
+                SELECT id, note_id, status
+                FROM processing_jobs
+                ORDER BY created_at DESC
+                """
+            ).fetchall()
+
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0]["status"], "queued")
+
+        self.run_queued_jobs()
+
         facts = storage.list_facts()
+
         self.assertEqual(len(facts), 1)
         self.assertEqual(facts[0]["status"], "active")
+
+        with storage.get_connection() as conn:
+            job = conn.execute(
+                """
+                SELECT status
+                FROM processing_jobs
+                WHERE id = ?
+                """,
+                (jobs[0]["id"],),
+            ).fetchone()
+
+        self.assertEqual(job["status"], "succeeded")
 
     def test_approval_through_browser(self):
         self.post("/add", {"text": "mixer warranty"})
 
+        # Extract pending fact through the worker.
+        self.run_queued_jobs()
+
         with storage.get_connection() as conn:
             approval = conn.execute(
-                "SELECT id FROM approvals LIMIT 1"
+                """
+                SELECT id
+                FROM approvals
+                WHERE status = 'pending'
+                LIMIT 1
+                """
             ).fetchone()
 
         self.assertIsNotNone(approval)
@@ -166,6 +219,8 @@ class WebTests(unittest.TestCase):
         )
 
         facts = storage.list_facts()
+
+        self.assertEqual(len(facts), 1)
         self.assertEqual(facts[0]["status"], "active")
 
     def test_ask_displays_source(self):
@@ -178,6 +233,8 @@ class WebTests(unittest.TestCase):
             },
         )
 
+        self.run_queued_jobs()
+
         status, body = self.get("/ask?q=Why+yoga%3F")
 
         self.assertEqual(status, 200)
@@ -186,6 +243,8 @@ class WebTests(unittest.TestCase):
 
     def test_unrelated_question_unknown(self):
         self.post("/add", {"text": "mixer warranty"})
+
+        self.run_queued_jobs()
 
         status, body = self.get(
             "/ask?q=Where+is+my+fictional+passport%3F"
@@ -227,7 +286,12 @@ class WebTests(unittest.TestCase):
             },
         )
 
-        fact_id = storage.list_facts()[0]["id"]
+        self.run_queued_jobs()
+
+        facts = storage.list_facts()
+        self.assertEqual(len(facts), 1)
+
+        fact_id = facts[0]["id"]
 
         self.post(
             "/forget",

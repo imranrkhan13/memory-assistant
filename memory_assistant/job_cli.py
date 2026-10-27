@@ -26,6 +26,11 @@ def print_json(value):
 
 
 def main():
+    from .config import load_env
+    load_env()
+    from .pipeline import prepare_schema
+    init_db()
+    prepare_schema()
     parser = argparse.ArgumentParser(
         description="Personal Memory Assistant - Phase 7 Jobs"
     )

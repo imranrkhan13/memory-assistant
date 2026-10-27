@@ -6,6 +6,16 @@ import sqlite3
 import uuid
 from datetime import datetime, timedelta, timezone
 from .storage import get_connection
+SAFE_ERROR_MESSAGES = {
+    "No facts extracted; review the note or provider.",
+    "Provider HTTP failure; check configuration or quota.",
+    "Provider connection failed or timed out.",
+    "Configure the Gemini key and model, then reprocess.",
+    "Provider returned invalid or unusable data; review provider configuration.",
+    "Invalid configuration or extraction data; review and reprocess.",
+    "Processing interrupted; retry scheduled.",
+}
+
 def now():
     return datetime.now(timezone.utc).isoformat()
 
@@ -239,6 +249,7 @@ def fail_job(
     lease_token,
     error_code="PROCESSING_ERROR",
     error_message="Processing failed",
+    transient=True,
 ):
     """Retry a failed attempt or permanently fail after max attempts.
 
@@ -247,7 +258,8 @@ def fail_job(
     """
     timestamp = now()
     safe_code = str(error_code)[:80]
-    safe_message = "Note processing failed"
+    # Caller supplies only a fixed, content-free classification.
+    safe_message = error_message if error_message in SAFE_ERROR_MESSAGES else "Note processing failed"
 
     with get_connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
@@ -266,7 +278,7 @@ def fail_job(
         if row is None:
             return False
 
-        can_retry = row["attempts"] < row["max_attempts"]
+        can_retry = transient and row["attempts"] < row["max_attempts"]
 
         if can_retry:
             delay = min(

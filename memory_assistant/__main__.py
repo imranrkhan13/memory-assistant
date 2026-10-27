@@ -1,6 +1,7 @@
 
 """Personal Memory Assistant CLI — Phases 0 through 5."""
 from .config import load_env
+from .queued_notes import add_queued_note
 load_env()
 import argparse
 from .ai import process_note, answer_question
@@ -41,6 +42,8 @@ def main():
     commands.add_parser("facts")
     commands.add_parser("pending")
     commands.add_parser("audit")
+    reprocess = commands.add_parser("reprocess")
+    reprocess.add_argument("id", type=int)
 
     server_command = commands.add_parser("serve")
     server_command.add_argument(
@@ -104,17 +107,19 @@ def main():
                     "This exact note was previously forgotten."
                 )
 
-            note_id = add_note(args.text)
+            note_id, job_id = add_queued_note(args.text)
+
             print(f"Note saved. ID: {note_id}")
+            print(f"Processing job queued: {job_id}")
+            print("The background worker will extract the facts.")
 
-            results = process_note(note_id)
+        except ValueError as error:
+            print(f"Error: {error}")
 
-            if not results:
-                print("SAMPLE: No matching extraction fixture.")
-
-            for status, fact_id in results:
-                print(f"SAMPLE: Fact #{fact_id}: {status}")
-
+    elif args.command == "reprocess":
+        from .note_processing import reprocess_note
+        try:
+            print("Processing job queued:", reprocess_note(args.id))
         except ValueError as error:
             print(f"Error: {error}")
 
@@ -125,7 +130,11 @@ def main():
             print("No notes available.")
 
         for note in notes:
-            print(f"[{note['id']}] {note['raw_text']}")
+            from .note_processing import processing_status
+            status = processing_status(note["id"])
+            print(f"[{note['id']}] {note['raw_text']} | {status['state']}")
+            if status.get("last_error_message"):
+                print(status["last_error_message"])
 
     elif args.command == "facts":
         facts = list_facts()
@@ -149,6 +158,7 @@ def main():
             print(
                 f"SAMPLE approval #{fact['approval_id']}: "
                 f"{fact['statement']} ({fact['reason']})"
+                f" | Old: {'; '.join(fact['old_statements']) or 'No active fact'}"
             )
 
     elif args.command in ("approve", "reject", "edit"):

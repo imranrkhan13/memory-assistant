@@ -15,6 +15,11 @@ from .worker import process_next_job
 
 
 def main():
+    from .config import load_env
+    load_env()
+    from .pipeline import prepare_schema
+    init_db()
+    prepare_schema()
     parser = argparse.ArgumentParser(
         description="Personal Memory Assistant background worker"
     )

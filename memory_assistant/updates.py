@@ -1,5 +1,7 @@
 
 """Phase 4: atomic approval, superseding and fact history."""
+import json
+
 from .storage import (
     DEFAULT_USER_ID,
     get_connection,
@@ -39,9 +41,10 @@ def resolve_update(
             )
 
     with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         approval = conn.execute(
             """
-            SELECT a.fact_id, f.subject, f.value, f.statement
+            SELECT a.fact_id, f.subject, f.value, f.statement, a.expected_active_ids
             FROM approvals a
             JOIN facts f
               ON f.id = a.fact_id
@@ -82,6 +85,10 @@ def resolve_update(
                 """,
                 (user_id, approval["subject"], fact_id),
             ).fetchall()
+
+            expected = approval["expected_active_ids"]
+            if expected is None or sorted(json.loads(expected)) != sorted(row["id"] for row in old_facts):
+                raise ValueError("Current facts changed since this proposal. Reprocess the note to review a fresh proposal.")
 
             for old in old_facts:
                 conn.execute(
