@@ -35,6 +35,11 @@ def tokens(text):
     }
 
 
+def keyword_score(query_words, source_words):
+    """Exact-token overlap shared with the retrieval-only benchmark."""
+    return len(query_words & source_words)
+
+
 def retrieve(question, user_id=DEFAULT_USER_ID):
     """Rank active facts using their original source notes."""
     query_words = tokens(question)
@@ -70,12 +75,12 @@ def retrieve(question, user_id=DEFAULT_USER_ID):
         # The original note is authoritative for relevance.
         # Do not use generated fixture text to match a question.
         source_words = tokens(fact["raw_text"])
-        overlap = query_words & source_words
+        score = keyword_score(query_words, source_words)
 
-        if not overlap:
+        if not score:
             continue
 
-        fact["score"] = len(overlap)
+        fact["score"] = score
         matches.append(fact)
 
     matches.sort(

@@ -19,9 +19,10 @@ It uses a simplified **Retrieval-Augmented Generation (RAG)** architecture. Pyth
 | Phase 6 | Google Gemini integration | Completed |
 | Phase 7 | Durable extraction jobs, leases, retries and metadata traces | Implemented foundation |
 | Phase A | Correctness and normal durable save path | Offline tests passing |
-| Phases B–E | Measured semantic retrieval, service API, extended reliability, demonstration | Not started |
+| Retrieval benchmark Stages 0–1 | Pinned LongMemEval adapter and keyword runner | Implemented; measured report linked below |
+| Later stages | Semantic comparison, answer evaluation, traces, API and second client | Not started |
 
-**Current testing (27 October 2026):** 100 automated tests passed using mock/stub providers and temporary databases. No live Gemini calls were made in Phase A; real-model extraction and answer quality remain unconfirmed. See [Phase A evidence](docs/phase-a.md).
+**Current testing (27 October 2026):** 124 automated tests passed using offline logic, mock/stub providers and temporary databases. No live Gemini calls were made in Phase A; real-model extraction and answer quality remain unconfirmed. See [Phase A evidence](docs/phase-a.md).
 
 ## Requirements
 
@@ -388,15 +389,26 @@ No live Gemini extraction or answering was verified in Phase A. Previous README 
 1. Retrieval uses keyword matching rather than semantic embeddings.
 2. Reprocessing is explicit; changing providers does not replace already extracted facts.
 3. Relative dates such as "tomorrow" are not reliably normalized using the note creation date.
-4. There is no quality evaluation runner, versioned service API or second API client yet.
+4. A retrieval-only benchmark runner exists; semantic comparisons, answer quality evaluation, a versioned service API and a second API client are still missing.
 5. Gemini API calls require an internet connection.
 6. The application is intended for local development, not production hosting.
 
 ## Future Roadmap
 
-### Next: Phase B — measured retrieval quality
+### Retrieval evaluation: Stages 0–1
 
-Keep keyword retrieval as the baseline, choose a free local semantic approach only after checking hardware and licence constraints, and compare both on a frozen synthetic evaluation set. Phase B requires the owner's go-ahead after Phase A review.
+A separate model-free adapter measures keyword evidence retrieval on the public cleaned LongMemEval S dataset. It bypasses extraction/approval deliberately and never indexes reference answers, questions or evidence labels.
+
+```bash
+python3 -m memory_assistant.benchmark download
+python3 -m memory_assistant.benchmark run --method keyword --subset dev
+```
+
+The 277 MB download is pinned by revision and SHA-256 and stays outside Git. The split is frozen at 40 dev and 60 reserved heldout questions. Runs write versioned JSON results with `recall_all@10`, `ndcg_any@10`, misses, failures, denominator and latency. The benchmark never calls a model or reads your notes or `.env`. [Methodology, commands and evidence](docs/benchmark-stages-0-1.md).
+
+The first keyword dev run found **all required evidence in the top 10 for 30/38 scored questions** (`recall_all@10=0.789474`, mean `ndcg_any@10=0.761281`). There were 0 failed questions and 2 abstentions excluded from retrieval scoring. Retrieval-only latency across 38 questions was p50 3.98 ms / p95 4.86 ms in one local run. This is a retrieval subset result, not answer accuracy or a vendor-comparable full-benchmark result. No model calls were made; the 60 heldout questions remain unevaluated. [Versioned results and misses](benchmarks/longmemeval/results/keyword-dev-v1.json).
+
+Next, compare free local semantic and hybrid retrieval on the same dev questions, after checking hardware and licence constraints. Heldout execution stays disabled until methods are frozen. Retrieval scores and answer accuracy are separate measurements.
 
 Later phases cover a versioned API, a second client, richer answer traces and a reproducible demonstration. Current traces contain extraction metadata only.
 
