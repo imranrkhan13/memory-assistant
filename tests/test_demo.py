@@ -288,3 +288,77 @@ class DemoModeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+class GlobalGeminiCapTests(unittest.TestCase):
+    """Shared Gemini budget: counting, exhaustion, provider guard."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.env = patch.dict(
+            "os.environ",
+            {
+                "MEMORY_DEMO": "1",
+                "MEMORY_DEMO_DIR": str(
+                    Path(self.temp.name) / "demo_data"
+                ),
+                "MEMORY_GEMINI_GLOBAL_CAP": "2",
+            },
+        )
+        self.env.start()
+
+    def tearDown(self):
+        self.env.stop()
+        self.temp.cleanup()
+
+    def test_shared_budget_counts_and_exhausts(self):
+        self.assertEqual(demo.gemini_calls_used(), 0)
+        self.assertTrue(demo.try_reserve_gemini_call())
+        self.assertTrue(demo.try_reserve_gemini_call())
+        self.assertEqual(demo.gemini_calls_used(), 2)
+        self.assertFalse(demo.try_reserve_gemini_call())
+        # Counter stays bounded at the cap.
+        self.assertEqual(demo.gemini_calls_used(), 2)
+
+    def test_provider_refuses_when_budget_exhausted(self):
+        from memory_assistant.gemini import (
+            GeminiError,
+            GeminiProvider,
+        )
+
+        self.assertTrue(demo.try_reserve_gemini_call())
+        self.assertTrue(demo.try_reserve_gemini_call())
+        provider = GeminiProvider(api_key="test-key")
+        with self.assertRaises(GeminiError) as ctx:
+            provider._generate("hello")
+        self.assertIn("budget", str(ctx.exception))
+        self.assertEqual(demo.gemini_calls_used(), 2)
+
+    def test_budget_check_skipped_outside_demo(self):
+        from memory_assistant.gemini import GeminiProvider
+
+        provider = GeminiProvider(api_key="test-key")
+        with patch.dict("os.environ", {"MEMORY_DEMO": "0"}):
+            provider._check_demo_budget()
+        self.assertEqual(demo.gemini_calls_used(), 0)
+
+    def test_corrupt_counter_fails_closed(self):
+        path = demo._global_usage_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("not-a-number")
+        self.assertFalse(demo.try_reserve_gemini_call())
+
+    def test_reservations_are_atomic_across_threads(self):
+        results = []
+        lock = threading.Lock()
+
+        def reserve():
+            ok = demo.try_reserve_gemini_call()
+            with lock:
+                results.append(ok)
+
+        threads = [threading.Thread(target=reserve) for _ in range(10)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(sum(results), 2)
+        self.assertEqual(demo.gemini_calls_used(), 2)
