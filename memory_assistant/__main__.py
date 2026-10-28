@@ -47,9 +47,14 @@ def main():
 
     server_command = commands.add_parser("serve")
     server_command.add_argument(
+        "--host",
+        type=str,
+        default=None,
+    )
+    server_command.add_argument(
         "--port",
         type=int,
-        default=8765,
+        default=None,
     )
 
     add = commands.add_parser("add")
@@ -87,10 +92,10 @@ def main():
     if args.command == "serve":
         from .web import serve
 
-        if not 1 <= args.port <= 65535:
+        if args.port is not None and not 1 <= args.port <= 65535:
             parser.error("Port must be between 1 and 65535.")
 
-        serve(port=args.port)
+        serve(host=args.host, port=args.port)
         return
 
     init_db()
