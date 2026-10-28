@@ -9,8 +9,10 @@ services:
       - key: MEMORY_DEMO
         value: "1"
       - key: MEMORY_PROVIDER
-        value: mock
+        value: gemini
       - key: MEMORY_HOST
         value: 0.0.0.0
+      - key: MEMORY_GEMINI_GLOBAL_CAP
+        value: "200"
       - key: PYTHON_VERSION
         value: "3.12"
