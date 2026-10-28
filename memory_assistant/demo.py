@@ -173,6 +173,79 @@ def reset_workspace(session_id):
     return ensure_workspace(session_id)
 
 
+DEFAULT_GLOBAL_GEMINI_LIMIT = 200
+
+
+def global_gemini_limit():
+    """Shared Gemini call budget across all demo visitors."""
+    return int(
+        os.environ.get(
+            "MEMORY_GEMINI_GLOBAL_CAP",
+            DEFAULT_GLOBAL_GEMINI_LIMIT,
+        )
+    )
+
+
+def _global_usage_path():
+    return demo_dir() / "global_gemini_usage.txt"
+
+
+def _read_global_usage(path):
+    """Counter value, or None when the file is unreadable/corrupt.
+
+    A missing file means zero calls: the counter lives on ephemeral
+    demo storage, so a cold start or redeploy resets the budget.
+    Anything else wrong with the file fails closed (treated as
+    exhausted) rather than resetting the budget.
+    """
+    try:
+        text = path.read_text().strip()
+    except FileNotFoundError:
+        return 0
+    except OSError:
+        return None
+    try:
+        value = int(text)
+    except ValueError:
+        return None
+    if value < 0:
+        return None
+    return value
+
+
+def gemini_calls_used():
+    """Best-effort counter read for display/tests; corrupt reads as full."""
+    used = _read_global_usage(_global_usage_path())
+    if used is None:
+        return global_gemini_limit()
+    return used
+
+
+def try_reserve_gemini_call():
+    """Atomically reserve one shared Gemini call; False when exhausted.
+
+    The counter increments under one lock BEFORE the request is sent,
+    so concurrent worker/request threads cannot both pass the check,
+    and failed requests and retries count against the budget too. The
+    counter never exceeds the cap. Fails closed when the counter file
+    cannot be read or written.
+    """
+    with _rate_lock:
+        path = _global_usage_path()
+        used = _read_global_usage(path)
+        if used is None:
+            return False
+        limit = global_gemini_limit()
+        if used >= limit:
+            return False
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(str(min(used + 1, limit)))
+        except OSError:
+            return False
+        return True
+
+
 def check_rate_limit(session_id, kind):
     """True if the action is allowed; False when over the hourly cap."""
     limits = {
