@@ -1,0 +1,44 @@
+services:
+
+  - type: web
+  
+    name: memory-assistant-demo
+    
+    runtime: python
+    
+    plan: free
+    
+    buildCommand: "true"
+    
+    startCommand: python3 -m memory_assistant serve
+    
+    envVars:
+    
+      - key: MEMORY_DEMO
+      
+        value: "1"
+        
+      - key: MEMORY_PROVIDER
+      
+        value: mock
+        
+      - key: MEMORY_HOST
+      
+        value: 0.0.0.0
+        
+      - key: PYTHON_VERSION
+      
+        value: "3.12"
+
+
+
+
+
+
+
+
+
+
+
+
+
