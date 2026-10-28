@@ -21,3 +21,6 @@ venv/
 
 # Public benchmark downloads and rebuildable local indexes
 /benchmarks/longmemeval/local/
+
+# Hosted demo per-visitor workspaces
+demo_data/
