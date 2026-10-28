@@ -3,6 +3,7 @@
 
 import re
 import sqlite3
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -53,8 +54,30 @@ def check_secrets(text):
     ]
 
 
+_thread_state = threading.local()
+
+
+def set_current_db_path(path):
+    """Point the current thread at a different database file.
+
+    Used by hosted demo mode so each visitor session works against
+    its own isolated SQLite file. Normal local use never calls this.
+    """
+    _thread_state.db_path = str(path)
+
+
+def clear_current_db_path():
+    """Remove the per-thread database override, if any."""
+    _thread_state.db_path = None
+
+
+def _current_db_path():
+    override = getattr(_thread_state, "db_path", None)
+    return override if override else DB_PATH
+
+
 def get_connection():
-    connection = sqlite3.connect(DB_PATH)
+    connection = sqlite3.connect(_current_db_path())
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     return connection
