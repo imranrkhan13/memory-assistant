@@ -192,8 +192,11 @@ def layout(title, body):
         if provider == "gemini":
             guidance = (
                 "Interactive demo. Type your own fictional notes; "
-                "answers come from a live AI model. Please do not "
-                "enter real personal information."
+                "answers and note extraction use Google Gemini "
+                "(free tier), so text you enter is sent to Google "
+                "for processing. Please do not enter real personal "
+                "information. A shared usage cap applies across "
+                "all visitors; AI answers pause when it is used up."
             )
         else:
             guidance = (
