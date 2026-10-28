@@ -442,7 +442,9 @@ visitor gets their own isolated fictional workspace:
 - "Reset my demo workspace" wipes only that visitor's data and
   re-seeds it.
 - Hourly per-visitor limits: 15 notes and 60 questions. Workspaces
-  expire after 24 hours (swept hourly), and the total number of
+  become eligible for deletion about 24 hours after last use and are
+  removed by an hourly sweep, so deletion can take up to an hour
+  longer; access does not extend the timer. The total number of
   workspaces is capped at 200, evicting the oldest first.
 - With `MEMORY_PROVIDER=mock` (default) only the built-in example
   notes are understood and no network calls are made. With
