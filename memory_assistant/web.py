@@ -11,6 +11,7 @@ import secrets
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlencode, urlsplit
+from . import demo
 from .ai import (
     get_provider,
     process_note,
@@ -24,7 +25,9 @@ from .note_processing import processing_status, reprocess_note
 
 from .storage import (
     add_note,
+    clear_current_db_path,
     init_db,
+    set_current_db_path,
     list_audit_log,
     list_facts,
     list_notes,
@@ -180,24 +183,65 @@ def layout(title, body):
         '<a href="/audit">Audit</a>'
         '</nav>'
     )
+
+    if demo.enabled():
+        provider = os.environ.get("MEMORY_PROVIDER", "mock")
+        ttl = os.environ.get(
+            "MEMORY_DEMO_TTL_HOURS", str(demo.DEFAULT_TTL_HOURS)
+        )
+        if provider == "gemini":
+            guidance = (
+                "Interactive demo. Type your own fictional notes; "
+                "answers come from a live AI model. Please do not "
+                "enter real personal information."
+            )
+        else:
+            guidance = (
+                "Interactive demo with offline sample extraction. "
+                "Use the example notes below the add form; this "
+                "deployment runs without the live AI model, so "
+                "free-typed notes are not understood yet."
+            )
+        banner = (
+            '<div class="warning">'
+            + esc(
+                guidance
+                + " Your workspace is tied to a cookie in this "
+                "browser and stored on the demo server, separate "
+                "from other visitors; it is not saved in your "
+                "browser. It holds only fictional sample data and "
+                "is kept for about "
+                + ttl
+                + " hours. "
+            )
+            + form("/demo/reset", "", "Reset my demo workspace")
+            + "</div>"
+        )
+        header_note = "Interactive demo workspace"
+    else:
+        banner = (
+            '<div class="warning">'
+            "Development mode. Use fictional data only. "
+            "No login or database encryption is implemented."
+            "</div>"
+        )
+        header_note = "Private local workspace"
+
     return (
         '<!doctype html><html lang="en"><head>'
         '<meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
-        '<title>' + esc(title) + ' — Memory Assistant</title>'
-        '<style>' + CSS + '</style></head><body>'
-        '<header><h1>Personal Memory Assistant</h1>'
-        '<p>Private local workspace · Provider: '
+        "<title>" + esc(title) + " - Memory Assistant</title>"
+        "<style>" + CSS + "</style></head><body>"
+        "<header><h1>Personal Memory Assistant</h1>"
+        "<p>" + header_note + " · Provider: "
         + esc(os.environ.get("MEMORY_PROVIDER", "mock"))
-        + '</p></header>'
+        + "</p></header>"
         + nav
-        + '<main>'
-        + '<div class="warning">'
-        'Development mode. Use fictional data only. '
-        'No login or database encryption is implemented.'
-        '</div>'
+        + "<main>"
+        + banner
         + body
-        + '</main></body></html>'
+        + "</main></body></html>"
     )
 
 
@@ -216,14 +260,41 @@ def render_dashboard():
         '<p>Active facts: <strong>' + str(active) + '</strong></p>'
         '<p>Pending approvals: <strong>'
         + str(len(approvals)) + '</strong></p>'
-        '<p class="muted">All information stays in your '
-        'local SQLite database. No Gemini requests yet.</p>'
+        '<p class="muted">'
+        + esc(
+            "Each visitor gets a separate fictional demo workspace."
+            if demo.enabled()
+            else "All information stays in your local SQLite "
+            "database. No Gemini requests yet."
+        )
+        + "</p>"
         '</section>'
         + render_add_form()
     )
 
 
 def render_add_form():
+    examples = ""
+    if demo.enabled():
+        provider = os.environ.get("MEMORY_PROVIDER", "mock")
+        texts = (
+            demo.GEMINI_EXAMPLES
+            if provider == "gemini"
+            else demo.MOCK_EXAMPLES
+        )
+        buttons = "".join(
+            form(
+                "/add",
+                '<input type="hidden" name="text" value="'
+                + esc(text)
+                + '">',
+                "Try: " + text,
+            )
+            for text in texts
+        )
+        examples = (
+            '<p class="muted">Example notes to try:</p>' + buttons
+        )
     return (
         '<section><h2>Add a note</h2>'
         + form(
@@ -234,6 +305,7 @@ def render_add_form():
             'placeholder="Use a fictional SAMPLE note"></textarea>',
             "Save note",
         )
+        + examples
         + '</section>'
     )
 
@@ -378,7 +450,7 @@ def render_ask(question=""):
         )
 
     result += (
-        '<section><h2>MEMORy answer</h2>'
+        '<section><h2>Memory answer</h2>'
         '<div class="answer">'
         + esc(response["answer"])
         + '</div><p class="muted">Validation: '
@@ -548,6 +620,10 @@ class MemoryHandler(BaseHTTPRequestHandler):
         pass
 
     def _valid_host(self):
+        if demo.enabled():
+            # Public demo: the deployed hostname is not known in
+            # advance. POST origins are still checked against Host.
+            return True
         host = self.headers.get("Host", "")
         return host == f"{HOST}:{self.server.server_port}"
 
@@ -577,8 +653,23 @@ class MemoryHandler(BaseHTTPRequestHandler):
                 + "; Path=/; HttpOnly; SameSite=Strict",
             )
 
+        self._send_pending_session_cookie()
+
         self.end_headers()
         self.wfile.write(content)
+
+    def _send_pending_session_cookie(self):
+        pending = getattr(self, "_pending_session_cookie", None)
+        if not pending:
+            return
+        cookie = (
+            demo.SESSION_COOKIE + "=" + pending
+            + "; Path=/; HttpOnly; SameSite=Lax"
+        )
+        if self.headers.get("X-Forwarded-Proto") == "https":
+            cookie += "; Secure"
+        self.send_header("Set-Cookie", cookie)
+        self._pending_session_cookie = None
 
     def _error(self, status, message):
         self._send_html(
@@ -594,13 +685,45 @@ class MemoryHandler(BaseHTTPRequestHandler):
         self.send_response(303)
         self.send_header("Location", location)
         self.send_header("Cache-Control", "no-store")
+        self._send_pending_session_cookie()
         self.end_headers()
+
+    def _begin_demo_session(self):
+        # Resolve or create the visitor session and bind its
+        # database for this request thread. Returns the session id
+        # in demo mode, None otherwise.
+        if not demo.enabled():
+            return None
+        cookie = SimpleCookie()
+        try:
+            cookie.load(self.headers.get("Cookie", ""))
+            value = cookie[demo.SESSION_COOKIE].value
+        except (KeyError, ValueError):
+            value = ""
+        session_id = demo.verify_session(value)
+        if session_id is None:
+            session_id, signed = demo.new_session()
+            self._pending_session_cookie = signed
+        db_path = demo.ensure_workspace(session_id)
+        set_current_db_path(db_path)
+        return session_id
+
+    def _end_demo_session(self):
+        if demo.enabled():
+            clear_current_db_path()
 
     def do_GET(self):
         if not self._valid_host():
             self._error(400, "Invalid Host header.")
             return
 
+        session_id = self._begin_demo_session()
+        try:
+            self._do_get(session_id)
+        finally:
+            self._end_demo_session()
+
+    def _do_get(self, session_id):
         parsed = urlsplit(self.path)
         path = parsed.path
         query = parse_qs(parsed.query)
@@ -616,8 +739,20 @@ class MemoryHandler(BaseHTTPRequestHandler):
         elif path == "/approvals":
             title, body = "Approvals", render_approvals()
         elif path == "/ask":
+            question = query.get("q", [""])[0][:1000]
+            if (
+                question
+                and session_id
+                and not demo.check_rate_limit(session_id, "ask")
+            ):
+                self._error(
+                    429,
+                    "Hourly question limit reached for this demo "
+                    "workspace. It resets within an hour.",
+                )
+                return
             title = "Ask Memory"
-            body = render_ask(query.get("q", [""])[0][:1000])
+            body = render_ask(question)
         elif path == "/history":
             title = "History"
             body = render_history(
@@ -671,14 +806,32 @@ class MemoryHandler(BaseHTTPRequestHandler):
             return
 
         origin = self.headers.get("Origin")
-        expected_origin = f"http://{HOST}:{self.server.server_port}"
 
-        if origin is not None and origin != expected_origin:
-            self._error(403, "Invalid request origin.")
-            return
+        if origin is not None:
+            if demo.enabled():
+                origin_host = urlsplit(origin).netloc
+                if origin_host != self.headers.get("Host", ""):
+                    self._error(403, "Invalid request origin.")
+                    return
+            else:
+                expected_origin = (
+                    f"http://{HOST}:{self.server.server_port}"
+                )
+                if origin != expected_origin:
+                    self._error(403, "Invalid request origin.")
+                    return
+
+        session_id = self._begin_demo_session()
+        try:
+            self._do_post_actions(session_id)
+        finally:
+            self._end_demo_session()
+
+    def _do_post_actions(self, session_id):
         path = urlsplit(self.path).path
         if path not in {
-            "/add", "/approve", "/reject", "/edit", "/forget", "/jobs/retry", "/notes/reprocess"
+            "/add", "/approve", "/reject", "/edit", "/forget",
+            "/jobs/retry", "/notes/reprocess", "/demo/reset",
         }:
             self._error(404, "Unknown action.")
             return
@@ -707,11 +860,24 @@ class MemoryHandler(BaseHTTPRequestHandler):
 
                 destination = "/jobs"
 
+            elif path == "/demo/reset":
+                if session_id:
+                    demo.reset_workspace(session_id)
+                destination = "/"
+
             elif path == "/add":
                 value = fields.get("text", [""])[0].strip()
 
                 if not value or len(value) > 10000:
                     raise ValueError("Invalid note length.")
+
+                if session_id and not demo.check_rate_limit(
+                    session_id, "add"
+                ):
+                    raise ValueError(
+                        "Hourly note limit reached for this demo "
+                        "workspace. It resets within an hour."
+                    )
 
                 if is_forgotten(value):
                     raise ValueError(
@@ -719,6 +885,9 @@ class MemoryHandler(BaseHTTPRequestHandler):
                     )
 
                 note_id, job_id = add_queued_note(value)
+
+                if session_id:
+                    demo.ensure_worker(session_id)
 
                 print(
                     f"Note #{note_id} queued as job {job_id}",
@@ -766,12 +935,28 @@ class MemoryHandler(BaseHTTPRequestHandler):
             self._error(400, str(error))
 
 
-def create_server(host=HOST, port=PORT):
-    """Create the local development server."""
-    if host != HOST:
-        raise ValueError("Only 127.0.0.1 is allowed.")
+def create_server(host=None, port=None):
+    """Create the HTTP server.
 
-    initialize()
+    Local mode binds 127.0.0.1 only. Demo mode (MEMORY_DEMO=1) may
+    bind another interface through MEMORY_HOST so a hosting provider
+    can expose it, and reads the port from the PORT environment
+    variable when set.
+    """
+    if host is None:
+        host = os.environ.get("MEMORY_HOST", HOST)
+    if port is None:
+        port = int(os.environ.get("PORT", PORT))
+
+    if host != HOST and not demo.enabled():
+        raise ValueError(
+            "Only 127.0.0.1 is allowed outside demo mode."
+        )
+
+    if demo.enabled():
+        demo.sweep_expired()
+    else:
+        initialize()
 
     return ThreadingHTTPServer(
         (host, port),
@@ -779,15 +964,23 @@ def create_server(host=HOST, port=PORT):
     )
 
 
-def serve(port=PORT):
-    server = create_server(port=port)
+def serve(host=None, port=None):
+    server = create_server(host=host, port=port)
 
+    bound_host, bound_port = server.server_address[:2]
     print(
         f"Personal Memory Assistant running at "
-        f"http://{HOST}:{server.server_port}",
+        f"http://{bound_host}:{bound_port}",
         flush=True,
     )
-    print("SAMPLE mode. Press Ctrl+C to stop.", flush=True)
+    if demo.enabled():
+        demo.start_sweeper()
+        print(
+            "Demo mode: per-visitor isolated fictional workspaces.",
+            flush=True,
+        )
+    else:
+        print("SAMPLE mode. Press Ctrl+C to stop.", flush=True)
 
     try:
         server.serve_forever()
