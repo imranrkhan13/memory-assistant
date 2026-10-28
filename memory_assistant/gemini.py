@@ -35,12 +35,11 @@ class GeminiProvider:
             return
         from . import demo
 
-        if not demo.gemini_global_allowed():
+        if not demo.try_reserve_gemini_call():
             raise GeminiError(
                 "This hosted demo's shared AI budget is used up "
                 "for now. Please try again later."
             )
-        demo.record_gemini_call()
 
     def _generate(self, prompt):
         self._check_demo_budget()
