@@ -430,3 +430,30 @@ The Personal Memory Assistant combines:
 The result is a local-first memory application that can save information, extract facts, require human approval, retrieve relevant memories, and generate source-linked answers.
 
 It is a working foundation for a more advanced personal AI memory system.
+## Hosted Demo Mode
+
+`MEMORY_DEMO=1` turns the browser app into a public demo where every
+visitor gets their own isolated fictional workspace:
+
+- Each browser receives a signed session cookie tied to its own SQLite
+  database under `demo_data/`. Visitors never see each other's notes.
+- Workspaces are seeded with two fictional sample memories so the
+  facts, approvals and history pages show content immediately.
+- "Reset my demo workspace" wipes only that visitor's data and
+  re-seeds it.
+- Hourly per-visitor limits: 15 notes and 60 questions. Workspaces
+  expire after 24 hours (swept hourly), and the total number of
+  workspaces is capped at 200, evicting the oldest first.
+- With `MEMORY_PROVIDER=mock` (default) only the built-in example
+  notes are understood and no network calls are made. With
+  `MEMORY_PROVIDER=gemini` and `GEMINI_API_KEY` set, visitors can
+  type their own fictional notes; the key stays server-side.
+
+Run it:
+
+```bash
+MEMORY_DEMO=1 MEMORY_HOST=0.0.0.0 PORT=10000 python3 -m memory_assistant serve
+```
+
+Demo workspaces are for fictional data only. No login or database
+encryption is implemented.
