@@ -29,7 +29,21 @@ class GeminiProvider:
             raise GeminiError("Invalid Gemini model name.")
 
 
+    def _check_demo_budget(self):
+        """Enforce the hosted demo's shared Gemini call budget."""
+        if os.environ.get("MEMORY_DEMO", "").strip() != "1":
+            return
+        from . import demo
+
+        if not demo.gemini_global_allowed():
+            raise GeminiError(
+                "This hosted demo's shared AI budget is used up "
+                "for now. Please try again later."
+            )
+        demo.record_gemini_call()
+
     def _generate(self, prompt):
+        self._check_demo_budget()
         url = (
             "https://generativelanguage.googleapis.com/"
             f"v1beta/models/{self.model}:generateContent"
